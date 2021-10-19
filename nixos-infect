@@ -13,13 +13,13 @@ makeConf() {
   local IFS=$'\n'
   for trypath in /root/.ssh/authorized_keys /home/$SUDO_USER/.ssh/authorized_keys $HOME/.ssh/authorized_keys; do
       [[ -r "$trypath" ]] \
-      && keys=$(sed -E 's/^.*((ssh|ecdsa)-[^[:space:]]+)[[:space:]]+([^[:space:]]+)([[:space:]]*.*)$/\1 \3\4/' "$trypath") \
+        && keys=$(sed -E 's/^(cert-authority[[:space:]])?[[:space:]]*.*((ssh|ecdsa)-[^[:space:]]+)[[:space:]]+([^[:space:]]+)([[:space:]]*.*)$/\1\2 \4/' "$trypath") \
       && break
   done
   local network_import=""
 
   [[ -n "$doNetConf" ]] && network_import="./networking.nix # generated at runtime by nixos-infect"
-  cat > /etc/nixos/configuration.nix << EOF
+  tee /dev/stderr > /etc/nixos/configuration.nix << EOF
 { ... }: {
   imports = [
     ./hardware-configuration.nix
@@ -65,7 +65,7 @@ $bootcfg
 }
 EOF
 
-  [[ -n "$doNetConf" ]] && makeNetworkingConf || true
+  if [[ -n "$doNetConf" ]]; then makeNetworkingConf; fi
 }
 
 makeNetworkingConf() {
@@ -83,15 +83,14 @@ makeNetworkingConf() {
     eth1_ip4s=$(ip address show dev "$eth1_name" | grep 'inet ' | sed -r 's|.*inet ([0-9.]+)/([0-9]+).*|{ address="\1"; prefixLength=\2; }|')
     eth1_ip6s=$(ip address show dev "$eth1_name" | grep 'inet6 ' | sed -r 's|.*inet6 ([0-9a-f:]+)/([0-9]+).*|{ address="\1"; prefixLength=\2; }|' || '')
     ether1=$(ip address show dev "$eth1_name" | grep link/ether | sed -r 's|.*link/ether ([0-9a-f:]+) .*|\1|')
-    interfaces1=<< EOF
-      $eth1_name = {
-        ipv4.addresses = [$(for a in "${eth1_ip4s[@]}"; do echo -n "
-          $a"; done)
-        ];
-        ipv6.addresses = [$(for a in "${eth1_ip6s[@]}"; do echo -n "
-          $a"; done)
-        ];
-EOF
+    interfaces1="$eth1_name = {
+  ipv4.addresses = [$(for a in "${eth1_ip4s[@]}"; do echo -n "
+    $a"; done)
+  ];
+  ipv6.addresses = [$(for a in "${eth1_ip6s[@]}"; do echo -n "
+    $a"; done)
+  ];
+"
     extraRules1="ATTR{address}==\"${ether1}\", NAME=\"${eth1_name}\""
   else
     interfaces1=""
@@ -168,7 +167,7 @@ findESP() {
   done
   [[ -z "$esp" ]] && { echo "ERROR: No ESP mount point found"; return 1; }
   for uuid in /dev/disk/by-uuid/*; do
-    [[ $(readlink -f "$uuid") == "$esp" ]] && echo $uuid && return 0
+    [[ $(readlink -f "$uuid") == "$esp" ]] && echo "$uuid" && return 0
   done
 }
 
@@ -183,7 +182,7 @@ prepareEnv() {
   # Retrieve root fs block device
   #                   (get root mount)  (get partition or logical volume)
   rootfsdev=$(mount | grep "on / type" | awk '{print $1;}')
-  rootfstype=$(df $rootfsdev --output=fstype | sed 1d)
+  rootfstype=$(df "$rootfsdev" --output=fstype | sed 1d)
 
   # DigitalOcean doesn't seem to set USER while running user data
   export USER="root"
